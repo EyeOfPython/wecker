@@ -70,11 +70,13 @@ class Wecker(object):
             if not self.is_stopped and not self.is_playing:
                 print('Music stopped')
                 music.stop()
+                self.is_stopped = True
             time.sleep(1)
 
 class WeckerWebServer(SimpleHTTPRequestHandler):
     
     enc = "utf-8"
+    wecker = None
     
     def do_GET(self):
         r = []
@@ -84,8 +86,12 @@ class WeckerWebServer(SimpleHTTPRequestHandler):
         query = parse.parse_qs(request.query)
         #if path.startswith('/'):
         #    self.view_syllables(r, query)
+        if 'stop' in query:
+            print('Stopping the music')
+            self.wecker.is_playing = False
         
         self.build_body(r)
+        self.view_overview(r, query)
         
         encoded = '\n'.join(r).encode(self.enc)
         self.send_headers(encoded)
@@ -93,6 +99,18 @@ class WeckerWebServer(SimpleHTTPRequestHandler):
         
     def view_overview(self, r, q):
         r.append('<h1>Overview</h1>')
+        r.append('<h3>Songs:</h3>')
+        r.append('<table>')
+        for i, song in enumerate(self.wecker.songs):
+            r.append('<tr><td>')
+            if self.wecker.curr_song_idx == i and self.wecker.is_playing:
+                r.append('->')
+            r.append('</td><td>')
+            r.append(song)
+            r.append('</td></tr>')
+        r.append('</table>')
+        
+        r.append('<a href="?stop=1">Stop The Music!</a>')
         
     def build_head(self, r):
         title = 'Overview' 
@@ -120,8 +138,11 @@ if __name__ == '__main__':
     wecker = Wecker(r'../Music')
     wecker.update_songs()
     wecker.times.append(datetime.now() + timedelta(seconds=5))
+    wecker.times.append(datetime.now() + timedelta(minutes=5))
     wecker.times.append(datetime.now() + timedelta(hours=5))
     wecker_thread = threading.Thread(target=wecker.main_loop)
+    WeckerWebServer.wecker = wecker
+    
     port = 6666
     
     Handler = WeckerWebServer
