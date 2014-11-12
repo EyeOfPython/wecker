@@ -117,7 +117,7 @@ if __name__ == '__main__':
     import SocketServer
     import threading
     
-    wecker = Wecker(r'L:\Users\Tobias Ruck\Music\test')
+    wecker = Wecker(r'../Music')
     wecker.update_songs()
     wecker.times.append(datetime.now() + timedelta(seconds=5))
     wecker.times.append(datetime.now() + timedelta(hours=5))
