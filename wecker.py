@@ -19,11 +19,15 @@ music = pygame.mixer.music
 SONG_END = pygame.USEREVENT + 1
 music.set_endevent(SONG_END)
 
+running = True
+
+TIME_FORMAT = '%Y-%m-%d %H:%M:%S'
+
 class Wecker(object):
     
     def __init__(self, songs_path):
         self.songs_path = songs_path
-        self.times = []
+        self.timers = []
         self.next_time = None
         self.songs = []
         self.curr_song_idx = 0
@@ -32,7 +36,7 @@ class Wecker(object):
         self.is_playing = False
         
     def update_next(self):
-        self.next_time = min(self.times)
+        self.next_time = min(self.timers)
         
     def play_current(self):
         music.load(self.songs[self.curr_song_idx])
@@ -42,6 +46,15 @@ class Wecker(object):
     def update_songs(self):
         self.songs = [ os.path.join(self.songs_path, f) for f in sorted(os.listdir(self.songs_path)) if f.endswith('.wav') or f.endswith('.mp3') or f.endswith('.ogg') ]
         
+    def add_timer(self, time):
+        self.timers.append(time)
+        self.timers.sort()
+        self.update_next()
+        
+    def delete_timer(self, time_idx):
+        del self.timers[time_idx]
+        self.update_next()
+        
     def main_loop(self):
         print("Started wecker loop...")
         print('Songs to be played are:')
@@ -49,7 +62,7 @@ class Wecker(object):
             print('  ', song)
             
         self.update_next()
-        while True:
+        while running:
             #print(music.get_busy())
             #if not music.get_busy() and self.is_playing:
             for event in pygame.event.get():
@@ -60,7 +73,7 @@ class Wecker(object):
             
             if self.next_time <= datetime.now():
                 print('Start beeping at ', datetime.now())
-                self.times.remove(self.next_time)
+                self.timers.remove(self.next_time)
                 self.update_next()
                 self.is_playing = True
                 self.is_stopped = False
@@ -89,6 +102,15 @@ class WeckerWebServer(SimpleHTTPRequestHandler):
         if 'stop' in query:
             print('Stopping the music')
             self.wecker.is_playing = False
+        if 'delete_timer' in query:
+            try:
+                timer_i = int(query['delete_timer'][0])
+                self.wecker.delete_timer(timer_i)
+            except:
+                pass
+        if 'new_timer' in query:
+            new_timer = datetime.strptime(query['new_timer'][0], TIME_FORMAT)
+            self.wecker.add_timer(new_timer)
         
         self.build_body(r)
         self.view_overview(r, query)
@@ -109,6 +131,24 @@ class WeckerWebServer(SimpleHTTPRequestHandler):
             r.append(song)
             r.append('</td></tr>')
         r.append('</table>')
+        
+        r.append('<h3>Timers:</h3>')
+        r.append('<table>')
+        for i, timer in enumerate(self.wecker.timers):
+            r.append('<tr><td>')
+            if self.wecker.next_time == timer:
+                r.append('->')
+            r.append('</td><td>')
+            r.append('<a href="?delete_timer=%d">X</a>' % i)
+            r.append('</td><td>')
+            r.append(str(timer))
+            r.append('</td></tr>')
+        r.append('</table>')
+        
+        r.append('<form method="get" action="">')
+        r.append('Add new timer: <input type="text" name="new_timer" value="%s"/>' % datetime.now().strftime(TIME_FORMAT))
+        r.append('<input type="submit" value="Add"/>')
+        r.append('</form>')
         
         r.append('<a href="?stop=1">Stop The Music!</a>')
         
@@ -137,9 +177,9 @@ if __name__ == '__main__':
     
     wecker = Wecker(r'../Music')
     wecker.update_songs()
-    wecker.times.append(datetime.now() + timedelta(seconds=5))
-    wecker.times.append(datetime.now() + timedelta(minutes=5))
-    wecker.times.append(datetime.now() + timedelta(hours=5))
+    wecker.add_timer(datetime.now() + timedelta(seconds=5))
+    wecker.add_timer(datetime.now() + timedelta(minutes=2))
+    wecker.add_timer(datetime.now() + timedelta(hours=5))
     wecker_thread = threading.Thread(target=wecker.main_loop)
     WeckerWebServer.wecker = wecker
     
@@ -150,7 +190,10 @@ if __name__ == '__main__':
     wecker_thread.start()
     time.sleep(0.01)
     print("Serve at port", port)
-    httpd.serve_forever()
+    try:
+        httpd.serve_forever()
+    except:
+        running = False
 
 if __name__ == '__main__':
     pass
