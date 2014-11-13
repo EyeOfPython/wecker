@@ -11,6 +11,8 @@ import urlparse as parse
 from datetime import datetime, timedelta, date
 import os, time
 
+import threading
+
 from icalendar import Calendar
 from dateutil.tz import tzlocal
 from urllib2 import urlopen
@@ -28,6 +30,7 @@ music.set_endevent(SONG_END)
 running = True
 
 TIME_FORMAT = '%Y-%m-%d %H:%M:%S'
+CALENDER_UPDATE_INTERVAL = timedelta(hours=3)
 
 class Wecker(object):
     
@@ -38,6 +41,7 @@ class Wecker(object):
         self.songs = []
         self.curr_song_idx = 0
         
+        self.last_calender_update = datetime.now()
         self.calendar_urls = []
         self.calendar_timers = []
         self.blocked_calendar_timers = set()
@@ -60,6 +64,7 @@ class Wecker(object):
         self.songs = [ os.path.join(self.songs_path, f) for f in sorted(os.listdir(self.songs_path)) if f.endswith('.wav') or f.endswith('.mp3') or f.endswith('.ogg') ]
         
     def update_calendars(self):
+        print('Calender update')
         self.calendar_timers = []
         now = datetime.now().replace(tzinfo=tzlocal())
         today = datetime(*date.today().timetuple()[:3]).replace(tzinfo=tzlocal())
@@ -79,6 +84,7 @@ class Wecker(object):
                             
         self.calendar_timers = [ { 'title': unicode(item['SUMMARY']), 'time': item['DTSTART'].dt, 'uid': hash(str(item['UID'])) } 
                                  for item in week.values() ]
+        pprint(self.calendar_timers)
         
     def play_current(self):
         music.load(self.songs[self.curr_song_idx])
@@ -97,13 +103,17 @@ class Wecker(object):
         
     def add_calendar(self, url):
         self.calendar_urls.append(url)
-        self.update_calendars()
-        self.update_next()
+        self.deffered_calendar_update()
         
     def remove_calendar(self, url):
         self.calendar_urls.remove(url)
-        self.update_calendars()
-        self.update_next()
+        self.deffered_calendar_update()
+        
+    def deffered_calendar_update(self):
+        def _update():
+            self.update_calendars()
+            self.update_next()
+        threading.Thread(target=_update).start()
         
     def toggle_block_calendar_timer(self, uid):
         self.blocked_calendar_timers ^= set( [uid] )
@@ -145,6 +155,10 @@ class Wecker(object):
                 self.is_stopped = False
                 self.curr_song_idx = 0
                 self.play_current()
+                
+            if self.last_calender_update <= datetime.now() + CALENDER_UPDATE_INTERVAL:
+                self.deffered_calendar_update()
+                self.last_calender_update = datetime.now()
                 
             if not self.is_stopped and not self.is_playing:
                 print('Music stopped')
@@ -234,6 +248,8 @@ class WeckerWebServer(SimpleHTTPRequestHandler):
             r.append('</td></tr>')
         r.append('</table>')
         
+        r.append('<p>Next calender update: s%</p>' % (self.wecker.last_calender_update + CALENDER_UPDATE_INTERVAL))
+        
         r.append('<form method="get" action="">')
         r.append('Add new user timer: <input type="text" name="new_timer" value="%s"/>' % datetime.now().strftime(TIME_FORMAT))
         r.append('<input type="submit" value="Add"/>')
@@ -262,8 +278,6 @@ class WeckerWebServer(SimpleHTTPRequestHandler):
 
 if __name__ == '__main__':
     import SocketServer
-    import threading
-    from pprint import pprint
     
     wecker = Wecker(r'C:\Users\ruckt\Music')
     wecker.add_calendar("https://www.martingansler.de/dhbw/cal/dhbw.php")
