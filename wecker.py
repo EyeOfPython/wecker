@@ -8,9 +8,15 @@ from __future__ import print_function
 from SimpleHTTPServer import SimpleHTTPRequestHandler
 import urlparse as parse
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import os, time
 
+from icalendar import Calendar
+from dateutil.tz import tzlocal
+from urllib2 import urlopen
+
+from pprint import pprint
+    
 import pygame
 pygame.init()
 pygame.mixer.init()
@@ -32,27 +38,83 @@ class Wecker(object):
         self.songs = []
         self.curr_song_idx = 0
         
+        self.calendar_urls = []
+        self.calendar_timers = []
+        self.blocked_calendar_timers = set()
+        
         self.is_stopped = True
         self.is_playing = False
         
     def update_next(self):
-        self.next_time = min(self.timers)
+        self.next_time = min(self.timers + [ ct['time'] for ct in self.calendar_timers if ct['uid'] not in self.blocked_calendar_timers ])
+        
+        now = datetime.now().replace(tzinfo=tzlocal())
+        blocked_and_passed = [ ct for ct in self.calendar_timers 
+                                    if ct['uid'] in self.blocked_calendar_timers 
+                                       and ct['time'] < now ]
+        for b in blocked_and_passed:
+            self.calendar_timers.remove(b)
+            self.blocked_calendar_timers.discard(b['uid'])
+        
+    def update_songs(self):
+        self.songs = [ os.path.join(self.songs_path, f) for f in sorted(os.listdir(self.songs_path)) if f.endswith('.wav') or f.endswith('.mp3') or f.endswith('.ogg') ]
+        
+    def update_calendars(self):
+        self.calendar_timers = []
+        now = datetime.now().replace(tzinfo=tzlocal())
+        today = datetime(*date.today().timetuple()[:3]).replace(tzinfo=tzlocal())
+        start_of_week = today - timedelta(days=today.weekday())
+        end_of_week = start_of_week + timedelta(days=5)
+        week = {} # earliest time to wake up
+        for url in self.calendar_urls:
+            calender_src = urlopen(url).read().decode('utf-8')
+            calendar = Calendar.from_ical(calender_src)
+            
+            for item in calendar.subcomponents:
+                if item.name == 'VEVENT':
+                    dstart = item['DTSTART'].dt
+                    if start_of_week <= dstart <= end_of_week and dstart > now:
+                        if dstart.date() not in week or dstart < week[dstart.date()]['DTSTART'].dt:
+                            week[dstart.date()] = item
+                            
+        self.calendar_timers = [ { 'title': unicode(item['SUMMARY']), 'time': item['DTSTART'].dt, 'uid': hash(str(item['UID'])) } 
+                                 for item in week.values() ]
         
     def play_current(self):
         music.load(self.songs[self.curr_song_idx])
         music.play()
         print('Playing: ', self.songs[self.curr_song_idx])
         
-    def update_songs(self):
-        self.songs = [ os.path.join(self.songs_path, f) for f in sorted(os.listdir(self.songs_path)) if f.endswith('.wav') or f.endswith('.mp3') or f.endswith('.ogg') ]
-        
     def add_timer(self, time):
+        time = time.replace(tzinfo=tzlocal())
         self.timers.append(time)
         self.timers.sort()
         self.update_next()
         
     def delete_timer(self, time_idx):
         del self.timers[time_idx]
+        self.update_next()
+        
+    def add_calendar(self, url):
+        self.calendar_urls.append(url)
+        self.update_calendars()
+        self.update_next()
+        
+    def remove_calendar(self, url):
+        self.calendar_urls.remove(url)
+        self.update_calendars()
+        self.update_next()
+        
+    def toggle_block_calendar_timer(self, uid):
+        self.blocked_calendar_timers ^= set( [uid] )
+        self.update_next()
+        
+    def block_calendar_timer(self, uid):
+        self.blocked_calendar_timers.add(uid)
+        self.update_next()
+        
+    def unblock_calendar_timer(self, uid):
+        self.blocked_calendar_timers.remove(uid)
         self.update_next()
         
     def main_loop(self):
@@ -63,17 +125,21 @@ class Wecker(object):
             
         self.update_next()
         while running:
-            #print(music.get_busy())
-            #if not music.get_busy() and self.is_playing:
             for event in pygame.event.get():
                 if event.type == SONG_END and self.is_playing:
                     print('Play next')
                     self.curr_song_idx = (self.curr_song_idx + 1) % len(self.songs)
                     self.play_current()
             
-            if self.next_time <= datetime.now():
-                print('Start beeping at ', datetime.now())
-                self.timers.remove(self.next_time)
+            if self.next_time <= datetime.now().replace(tzinfo=tzlocal()):
+                print('Start beeping at ', datetime.now(), 'for', self.next_time)
+                if self.next_time in self.timers:
+                    self.timers.remove(self.next_time)
+                for c in self.calendar_timers:
+                    if c['time'] == self.next_time:
+                        self.calendar_timers.remove(c)
+                        self.blocked_calendar_timers.discard(c['uid'])
+                        break
                 self.update_next()
                 self.is_playing = True
                 self.is_stopped = False
@@ -97,20 +163,28 @@ class WeckerWebServer(SimpleHTTPRequestHandler):
         request = parse.urlparse(self.path)
         path = request.path
         query = parse.parse_qs(request.query)
-        #if path.startswith('/'):
-        #    self.view_syllables(r, query)
+        
         if 'stop' in query:
             print('Stopping the music')
             self.wecker.is_playing = False
+            
         if 'delete_timer' in query:
             try:
                 timer_i = int(query['delete_timer'][0])
                 self.wecker.delete_timer(timer_i)
             except:
                 pass
+            
         if 'new_timer' in query:
             new_timer = datetime.strptime(query['new_timer'][0], TIME_FORMAT)
             self.wecker.add_timer(new_timer)
+        
+        if 'block_ctimer' in query:
+            try:
+                block_id = int(query['block_ctimer'][0])
+            except:
+                pass
+            self.wecker.toggle_block_calendar_timer(block_id)
         
         self.build_body(r)
         self.view_overview(r, query)
@@ -132,7 +206,7 @@ class WeckerWebServer(SimpleHTTPRequestHandler):
             r.append('</td></tr>')
         r.append('</table>')
         
-        r.append('<h3>Timers:</h3>')
+        r.append('<h3>User Timers:</h3>')
         r.append('<table>')
         for i, timer in enumerate(self.wecker.timers):
             r.append('<tr><td>')
@@ -145,8 +219,23 @@ class WeckerWebServer(SimpleHTTPRequestHandler):
             r.append('</td></tr>')
         r.append('</table>')
         
+        r.append('<h3>Calendar Timers:</h3>')
+        r.append('<table>')
+        for ct in self.wecker.calendar_timers:
+            r.append('<tr><td>')
+            if self.wecker.next_time == ct['time']:
+                r.append('->')
+            r.append('</td><td>')
+            r.append('<a href="?block_ctimer=%d">%s</a>' % (ct['uid'], 'UNBLOCK' if ct['uid'] in self.wecker.blocked_calendar_timers else 'block' ))
+            r.append('</td><td>')
+            r.append(ct['title'])
+            r.append('</td><td>')
+            r.append(str(ct['time']))
+            r.append('</td></tr>')
+        r.append('</table>')
+        
         r.append('<form method="get" action="">')
-        r.append('Add new timer: <input type="text" name="new_timer" value="%s"/>' % datetime.now().strftime(TIME_FORMAT))
+        r.append('Add new user timer: <input type="text" name="new_timer" value="%s"/>' % datetime.now().strftime(TIME_FORMAT))
         r.append('<input type="submit" value="Add"/>')
         r.append('</form>')
         
@@ -174,16 +263,20 @@ class WeckerWebServer(SimpleHTTPRequestHandler):
 if __name__ == '__main__':
     import SocketServer
     import threading
+    from pprint import pprint
     
-    wecker = Wecker(r'../Music')
+    wecker = Wecker(r'C:\Users\ruckt\Music')
+    wecker.add_calendar("https://www.martingansler.de/dhbw/cal/dhbw.php")
+    wecker.update_calendars()
+    
+    pprint(wecker.calendar_timers)
+    
     wecker.update_songs()
-    wecker.add_timer(datetime.now() + timedelta(seconds=5))
-    wecker.add_timer(datetime.now() + timedelta(minutes=2))
-    wecker.add_timer(datetime.now() + timedelta(hours=5))
+    wecker.add_timer(datetime(2020,1,1))
     wecker_thread = threading.Thread(target=wecker.main_loop)
     WeckerWebServer.wecker = wecker
     
-    port = 6666
+    port = 16666
     
     Handler = WeckerWebServer
     httpd = SocketServer.TCPServer(("", port), Handler)
