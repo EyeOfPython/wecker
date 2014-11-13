@@ -31,6 +31,7 @@ running = True
 
 TIME_FORMAT = '%Y-%m-%d %H:%M:%S'
 CALENDER_UPDATE_INTERVAL = timedelta(hours=3)
+EVENT_BUFFER_TIME = timedelta(hours=1, minutes=30)
 
 class Wecker(object):
     
@@ -81,7 +82,7 @@ class Wecker(object):
                         if dstart.date() not in week or dstart < week[dstart.date()]['DTSTART'].dt:
                             week[dstart.date()] = item
                             
-        self.calendar_timers = [ { 'title': unicode(item['SUMMARY']), 'time': item['DTSTART'].dt, 'uid': hash(str(item['UID'])) } 
+        self.calendar_timers = [ { 'title': unicode(item['SUMMARY']), 'time': item['DTSTART'].dt - EVENT_BUFFER_TIME, 'uid': hash(str(item['UID'])) } 
                                  for item in week.values() ]
         pprint(self.calendar_timers)
         
