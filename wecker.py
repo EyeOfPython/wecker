@@ -64,7 +64,6 @@ class Wecker(object):
         self.songs = [ os.path.join(self.songs_path, f) for f in sorted(os.listdir(self.songs_path)) if f.endswith('.wav') or f.endswith('.mp3') or f.endswith('.ogg') ]
         
     def update_calendars(self):
-        print('Calender update')
         self.calendar_timers = []
         now = datetime.now().replace(tzinfo=tzlocal())
         today = datetime(*date.today().timetuple()[:3]).replace(tzinfo=tzlocal())
@@ -103,13 +102,12 @@ class Wecker(object):
         
     def add_calendar(self, url):
         self.calendar_urls.append(url)
-        self.deffered_calendar_update()
         
     def remove_calendar(self, url):
         self.calendar_urls.remove(url)
-        self.deffered_calendar_update()
         
     def deffered_calendar_update(self):
+        print('Calender update at', datetime.now())
         def _update():
             self.update_calendars()
             self.update_next()
@@ -128,7 +126,7 @@ class Wecker(object):
         self.update_next()
         
     def main_loop(self):
-        print("Started wecker loop...")
+        print("Started wecker loop")
         print('Songs to be played are:')
         for song in self.songs:
             print('  ', song)
@@ -156,9 +154,10 @@ class Wecker(object):
                 self.curr_song_idx = 0
                 self.play_current()
                 
-            if self.last_calender_update <= datetime.now() + CALENDER_UPDATE_INTERVAL:
-                self.deffered_calendar_update()
+            if self.last_calender_update + CALENDER_UPDATE_INTERVAL <= datetime.now():
+                print('3 hour calender update at', datetime.now())
                 self.last_calender_update = datetime.now()
+                self.deffered_calendar_update()
                 
             if not self.is_stopped and not self.is_playing:
                 print('Music stopped')
@@ -248,7 +247,7 @@ class WeckerWebServer(SimpleHTTPRequestHandler):
             r.append('</td></tr>')
         r.append('</table>')
         
-        r.append('<p>Next calender update: s%</p>' % (self.wecker.last_calender_update + CALENDER_UPDATE_INTERVAL))
+        r.append('<p>Next calender update: %s</p>' % (self.wecker.last_calender_update + CALENDER_UPDATE_INTERVAL))
         
         r.append('<form method="get" action="">')
         r.append('Add new user timer: <input type="text" name="new_timer" value="%s"/>' % datetime.now().strftime(TIME_FORMAT))
@@ -279,11 +278,10 @@ class WeckerWebServer(SimpleHTTPRequestHandler):
 if __name__ == '__main__':
     import SocketServer
     
-    wecker = Wecker(r'C:\Users\ruckt\Music')
+    wecker = Wecker(r'../Music')
     wecker.add_calendar("https://www.martingansler.de/dhbw/cal/dhbw.php")
+    print('Initialize calendar')
     wecker.update_calendars()
-    
-    pprint(wecker.calendar_timers)
     
     wecker.update_songs()
     wecker.add_timer(datetime(2020,1,1))
